@@ -7,6 +7,7 @@ from pymongo import MongoClient
 from bson import ObjectId
 from typing import Optional
 import secrets
+import logging
 app = FastAPI()
 
 uri = "mongodb+srv://maruis:maruis@quizapi.q1m3hy9.mongodb.net/?retryWrites=true&w=majority&appName=QUIZAPI"
@@ -45,17 +46,27 @@ class Sondage(BaseModel):
 
 class User(BaseModel):
     username: str
+    email : str
     password: str
     api_key: Optional[str] = None
+
+
+# Configurer le système de logging
+logging.basicConfig(filename='api.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 # Créer un nouveau sondage
 @app.post("/sondages/", dependencies=[Depends(get_user)])
 async def creer_sondage(sondage: Sondage, user: dict = Depends(get_user)):
+    logging.info(f"Utilisateur {user['username']} a créé un sondage avec la question : {sondage.question}")
     sondage_id = surveys_collection.insert_one({**sondage.dict(), "user_id": user["_id"]}).inserted_id
     return {"sondage_id": str(sondage_id)}
+
+
 
 # Répondre à un sondage
 @app.post("/sondages/{sondage_id}/repondre/")
 async def repondre_sondage(sondage_id: str, reponse: str):
+    logging.info(f"Réponse au sondage {sondage_id} : {reponse}")
     sondage = surveys_collection.find_one({"_id": ObjectId(sondage_id)})
     if sondage:
         if reponse.lower() == "oui":
@@ -69,9 +80,12 @@ async def repondre_sondage(sondage_id: str, reponse: str):
     else:
         raise HTTPException(status_code=404, detail="Sondage non trouvé")
 
+
+
 # Obtenir les statistiques d'un sondage
 @app.get("/sondages/{sondage_id}/statistiques/", dependencies=[Depends(get_user)])
 async def obtenir_statistiques_sondage(sondage_id: str, user: dict = Depends(get_user)):
+    logging.info(f"Utilisateur {user['username']} a consulté les statistiques du sondage {sondage_id}")
     sondage = surveys_collection.find_one({"_id": ObjectId(sondage_id)})
     if sondage and sondage["user_id"] == user["_id"]:
         total_reponses = sondage["oui_count"] + sondage["non_count"]
@@ -83,10 +97,13 @@ async def obtenir_statistiques_sondage(sondage_id: str, user: dict = Depends(get
             raise HTTPException(status_code=404, detail="Pas de réponses encore")
     else:
         raise HTTPException(status_code=404, detail="Sondage non trouvé")
-    
+
+
+
 #supprimer le sondage
 @app.delete("/sondages/{sondage_id}/", dependencies=[Depends(get_user)])
 async def supprimer_sondage(sondage_id: str, user: dict = Depends(get_user)):
+    logging.info(f"Utilisateur {user['username']} a supprimé le sondage {sondage_id}")
     deleted_sondage = surveys_collection.find_one_and_delete({"_id": ObjectId(sondage_id), "user_id": user["_id"]})
     if deleted_sondage is None:
         raise HTTPException(
@@ -94,17 +111,25 @@ async def supprimer_sondage(sondage_id: str, user: dict = Depends(get_user)):
             detail="Sondage not found",
         )
     return {"message": "Sondage supprimé"}
+
+
+
 # Obtenir tous mes sondages
-@app.get("/sondages/")
-async def obtenir_sondages():
+@app.get("/sondages/", dependencies=[Depends(get_user)])
+async def obtenir_sondages(user: dict = Depends(get_user)):
+    logging.info(f"Utilisateur {user['username']} a consulté la liste de ses sondages")
     sondages = []
-    for sondage in surveys_collection.find():
+    for sondage in surveys_collection.find({"user_id": user["_id"]}):
         sondage["_id"] = str(sondage["_id"])
         sondages.append(sondage)
     return sondages
+
+
+
 # Obtenir un sondage par ID
 @app.get("/sondages/{sondage_id}/", dependencies=[Depends(get_user)])
 async def lire_sondage(sondage_id: str, user: dict = Depends(get_user)):
+    logging.info(f"Utilisateur {user['username']} a consulté le sondage {sondage_id}")
     sondage = surveys_collection.find_one({"_id": ObjectId(sondage_id)})
     if sondage is None or sondage["user_id"] != user["_id"]:
         raise HTTPException(
@@ -112,9 +137,13 @@ async def lire_sondage(sondage_id: str, user: dict = Depends(get_user)):
             detail="Sondage not found",
         )
     return sondage
+
+
+
 # Mettre à jour un sondage
 @app.put("/sondages/{sondage_id}/", dependencies=[Depends(get_user)])
 async def mettre_a_jour_sondage(sondage_id: str, sondage: Sondage, user: dict = Depends(get_user)):
+    logging.info(f"Utilisateur {user['username']} a mis à jour le sondage {sondage_id}")
     sondage = surveys_collection.find_one({"_id": ObjectId(sondage_id)})
     if sondage and sondage["user_id"] == user["_id"]:
         surveys_collection.update_one({"_id": ObjectId(sondage_id)}, {"$set": sondage.dict()})
@@ -122,18 +151,28 @@ async def mettre_a_jour_sondage(sondage_id: str, sondage: Sondage, user: dict = 
     else:
         raise HTTPException(status_code=404, detail="Sondage non trouvé")
 
-# Supprimer tous les sondages
+
+
+# Supprimer tous mes sondages
 @app.delete("/sondages/", dependencies=[Depends(get_user)])
 async def supprimer_sondages(user: dict = Depends(get_user)):
+    logging.info(f"Utilisateur {user['username']} a supprimé tous ses sondages")
     surveys_collection.delete_many({"user_id": user["_id"]})
     return {"message": "Tous les sondages de l'utilisateur ont été supprimés"}
 
-# Créer un utilisateur
 
+
+# Créer un utilisateur
 @app.post("/users/")
 async def create_user(user: User):
     user_dict = user.dict()
     if user_dict["api_key"] is None:
         user_dict["api_key"] = secrets.token_urlsafe(32)  # Génère une clé API sécurisée
-    user_id = users_collection.insert_one(user_dict).inserted_id
-    return {"user_id": str(user_id), "api_key": user_dict["api_key"]}
+    # Vérifier si l'utilisateur existe déjà et l'email aussi
+    if users_collection.find_one({"username": user_dict["username"]}):
+        raise HTTPException(status_code=400, detail="Username déjà utilisé")
+    elif users_collection.find_one({"email": user_dict["email"]}):
+        raise HTTPException(status_code=400, detail="Email déjà utilisé")
+    else:
+        user_id = users_collection.insert_one(user_dict).inserted_id
+    return {"api_key": user_dict["api_key"]}
