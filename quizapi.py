@@ -8,6 +8,8 @@ from bson import ObjectId
 from typing import Optional
 import secrets
 import logging
+import bcrypt
+
 app = FastAPI()
 
 uri = "mongodb+srv://maruis:maruis@quizapi.q1m3hy9.mongodb.net/?retryWrites=true&w=majority&appName=QUIZAPI"
@@ -48,7 +50,7 @@ class User(BaseModel):
     username: str
     email : str
     password: str
-    api_key: Optional[str] = None
+
 
 
 # Configurer le système de logging
@@ -166,13 +168,16 @@ async def supprimer_sondages(user: dict = Depends(get_user)):
 @app.post("/users/")
 async def create_user(user: User):
     user_dict = user.dict()
-    if user_dict["api_key"] is None:
-        user_dict["api_key"] = secrets.token_urlsafe(32)  # Génère une clé API sécurisée
+    user_dict["api_key"]= secrets.token_urlsafe(16)  # Génère une clé API sécurisée
+        
     # Vérifier si l'utilisateur existe déjà et l'email aussi
     if users_collection.find_one({"username": user_dict["username"]}):
         raise HTTPException(status_code=400, detail="Username déjà utilisé")
     elif users_collection.find_one({"email": user_dict["email"]}):
         raise HTTPException(status_code=400, detail="Email déjà utilisé")
     else:
+        # crypter le mot de passe en utilisant bcrypt
+        user_dict["password"] = bcrypt.hashpw(user_dict["password"].encode('utf-8'), bcrypt.gensalt())
+
         user_id = users_collection.insert_one(user_dict).inserted_id
     return {"api_key": user_dict["api_key"]}
