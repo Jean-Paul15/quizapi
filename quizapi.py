@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field , EmailStr
 from pymongo import MongoClient
 from bson import ObjectId
 from typing import Optional
@@ -15,7 +15,7 @@ app = FastAPI()
 uri = "mongodb+srv://maruis:maruis@quizapi.q1m3hy9.mongodb.net/?retryWrites=true&w=majority&appName=QUIZAPI"
 
 
-API_KEY_NAME = "access_token"
+API_KEY_NAME = "API_KEY"
 
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
@@ -48,7 +48,7 @@ class Sondage(BaseModel):
 
 class User(BaseModel):
     username: str
-    email : str
+    email : EmailStr
     password: str
 
 
@@ -94,12 +94,38 @@ async def obtenir_statistiques_sondage(sondage_id: str, user: dict = Depends(get
         if total_reponses > 0:
             pourcentage_oui = (sondage["oui_count"] / total_reponses) * 100
             pourcentage_non = (sondage["non_count"] / total_reponses) * 100
-            return {"pourcentage_oui": pourcentage_oui, "pourcentage_non": pourcentage_non}
+            return { "Question" : sondage["question"],
+                    "oui_count": sondage["oui_count"],
+                    "non_count": sondage["non_count"],
+                    "total_reponses": total_reponses,
+                    "pourcentage_oui": pourcentage_oui, 
+                    "pourcentage_non": pourcentage_non}
         else:
             raise HTTPException(status_code=404, detail="Pas de réponses encore")
     else:
         raise HTTPException(status_code=404, detail="Sondage non trouvé")
 
+# Obtenir les statistiques de tous les sondages
+@app.get("/sondages/statistiques/all", dependencies=[Depends(get_user)])
+async def obtenir_statistiques_sondages(user: dict = Depends(get_user)):
+    logging.info(f"Utilisateur {user['username']} a consulté les statistiques de tous ses sondages")
+    statistiques = {}
+    for sondage in surveys_collection.find({"user_id": user["_id"]}):
+        total_reponses = sondage["oui_count"] + sondage["non_count"]
+        if total_reponses > 0:
+            pourcentage_oui = (sondage["oui_count"] / total_reponses) * 100
+            pourcentage_non = (sondage["non_count"] / total_reponses) * 100
+            statistiques[str(sondage["_id"])] = {
+                "question": sondage["question"],
+                "oui_count": sondage["oui_count"],
+                "non_count": sondage["non_count"],
+                "total_reponses": total_reponses,
+                "pourcentage_oui": pourcentage_oui, 
+                "pourcentage_non": pourcentage_non
+            }
+    if not statistiques:
+        raise HTTPException(status_code=404, detail="Pas de sondages ou de réponses encore")
+    return statistiques
 
 
 #supprimer le sondage
@@ -117,13 +143,13 @@ async def supprimer_sondage(sondage_id: str, user: dict = Depends(get_user)):
 
 
 # Obtenir tous mes sondages
-@app.get("/sondages/", dependencies=[Depends(get_user)])
+@app.get("/sondages/all", dependencies=[Depends(get_user)])
 async def obtenir_sondages(user: dict = Depends(get_user)):
     logging.info(f"Utilisateur {user['username']} a consulté la liste de ses sondages")
-    sondages = []
-    for sondage in surveys_collection.find({"user_id": user["_id"]}):
+    sondages = {}
+    for i, sondage in enumerate(surveys_collection.find({"user_id": user["_id"]}), start=1):
         sondage["_id"] = str(sondage["_id"])
-        sondages.append(sondage)
+        sondages[f"Question {i}"] = sondage["question"]
     return sondages
 
 
@@ -138,7 +164,7 @@ async def lire_sondage(sondage_id: str, user: dict = Depends(get_user)):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Sondage not found",
         )
-    return sondage
+    return  { "Question" : sondage["question"]}
 
 
 
@@ -168,7 +194,7 @@ async def supprimer_sondages(user: dict = Depends(get_user)):
 @app.post("/users/")
 async def create_user(user: User):
     user_dict = user.dict()
-    user_dict["api_key"]= secrets.token_urlsafe(16)  # Génère une clé API sécurisée
+    user_dict["api_key"]= secrets.token_urlsafe(16) 
         
     # Vérifier si l'utilisateur existe déjà et l'email aussi
     if users_collection.find_one({"username": user_dict["username"]}):
@@ -176,7 +202,6 @@ async def create_user(user: User):
     elif users_collection.find_one({"email": user_dict["email"]}):
         raise HTTPException(status_code=400, detail="Email déjà utilisé")
     else:
-        # crypter le mot de passe en utilisant bcrypt
         user_dict["password"] = bcrypt.hashpw(user_dict["password"].encode('utf-8'), bcrypt.gensalt())
 
         user_id = users_collection.insert_one(user_dict).inserted_id
